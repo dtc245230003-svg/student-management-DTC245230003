@@ -1,0 +1,62 @@
+# Giai đoạn 2: web + MySQL + phpMyAdmin
+# (Nginx, giám sát, log sẽ được thêm ở các giai đoạn sau)
+services:
+  db:
+    image: mysql:8.0
+    container_name: sm-db
+    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      APP_DB_USER: ${DB_USER}
+      APP_DB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./db/02-create-app-user.sh:/docker-entrypoint-initdb.d/02-create-app-user.sh:ro
+    healthcheck:
+      # Dùng tài khoản app qua TCP: chỉ thành công sau khi khởi tạo DB xong
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -u$$APP_DB_USER -p$$APP_DB_PASSWORD -e 'SELECT 1' $$MYSQL_DATABASE"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks: [backend]
+
+  web:
+    build: ./app
+    container_name: sm-web
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"   # TẠM THỜI để kiểm thử; Giai đoạn 3 sẽ bỏ, chỉ đi qua Nginx
+    networks: [frontend, backend]
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: sm-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8081:80"     # TẠM THỜI để kiểm thử; Giai đoạn 3 sẽ bỏ, chỉ đi qua Nginx
+    networks: [frontend, backend]
+
+volumes:
+  mysql_data:
+
+networks:
+  frontend:
+  backend:
+    internal: true    # mạng DB không có đường ra internet

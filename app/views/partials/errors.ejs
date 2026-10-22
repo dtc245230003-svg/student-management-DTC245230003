@@ -1,0 +1,6 @@
+<% if (errors && errors.length) { %>
+<div class="flash bad" role="alert">
+  <strong>Chưa lưu được. Hãy sửa:</strong>
+  <ul><% errors.forEach(function(e){ %><li><%= e %></li><% }) %></ul>
+</div>
+<% } %>

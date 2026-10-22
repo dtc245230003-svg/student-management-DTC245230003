@@ -1,0 +1,18 @@
+<%- include('../partials/header', { title }) %>
+<h1><%= title %></h1>
+<%- include('../partials/errors', { errors }) %>
+<form method="post" action="<%= action %>" class="card">
+  <label>Mã sinh viên <input name="student_code" value="<%= item.student_code || '' %>" maxlength="20" required></label>
+  <label>Họ tên <input name="full_name" value="<%= item.full_name || '' %>" maxlength="100" required></label>
+  <label>Email <input type="email" name="email" value="<%= item.email || '' %>" maxlength="100" required></label>
+  <label>Lớp
+    <select name="class_id" required>
+      <option value="">— Chọn lớp —</option>
+      <% classes.forEach(function(c){ %>
+        <option value="<%= c.id %>" <%= String(item.class_id) === String(c.id) ? 'selected' : '' %>><%= c.class_code %> · <%= c.class_name %></option>
+      <% }) %>
+    </select>
+  </label>
+  <div class="row"><button class="btn primary">Lưu sinh viên</button><a class="btn" href="/students">Hủy</a></div>
+</form>
+<%- include('../partials/footer') %>

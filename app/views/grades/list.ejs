@@ -1,0 +1,20 @@
+<%- include('../partials/header', { title }) %>
+<div class="bar"><h1>Điểm số</h1><a class="btn primary" href="/grades/new">Thêm điểm</a></div>
+<%- include('../partials/flash', { msg, err }) %>
+<% if (!rows.length) { %><p class="muted">Chưa có điểm nào. Chọn “Thêm điểm” để nhập điểm đầu tiên.</p><% } else { %>
+<table>
+  <thead><tr><th>Mã SV</th><th>Họ tên</th><th>Môn học</th><th class="num">Điểm</th><th></th></tr></thead>
+  <tbody>
+  <% rows.forEach(function(r){ %>
+    <tr>
+      <td><%= r.student_code %></td><td><%= r.full_name %></td><td><%= r.subject %></td><td class="num"><%= r.score %></td>
+      <td class="actions">
+        <a class="btn" href="/grades/<%= r.id %>/edit">Sửa</a>
+        <form method="post" action="/grades/<%= r.id %>/delete" data-confirm="Xóa điểm môn <%= r.subject %> của <%= r.student_code %>?"><button class="btn danger">Xóa</button></form>
+      </td>
+    </tr>
+  <% }) %>
+  </tbody>
+</table>
+<% } %>
+<%- include('../partials/footer') %>

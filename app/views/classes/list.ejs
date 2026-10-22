@@ -1,0 +1,20 @@
+<%- include('../partials/header', { title }) %>
+<div class="bar"><h1>Lớp học</h1><a class="btn primary" href="/classes/new">Thêm lớp</a></div>
+<%- include('../partials/flash', { msg, err }) %>
+<% if (!rows.length) { %><p class="muted">Chưa có lớp nào. Chọn “Thêm lớp” để tạo lớp đầu tiên.</p><% } else { %>
+<table>
+  <thead><tr><th>Mã lớp</th><th>Tên lớp</th><th class="num">Số sinh viên</th><th></th></tr></thead>
+  <tbody>
+  <% rows.forEach(function(r){ %>
+    <tr>
+      <td><%= r.class_code %></td><td><%= r.class_name %></td><td class="num"><%= r.student_count %></td>
+      <td class="actions">
+        <a class="btn" href="/classes/<%= r.id %>/edit">Sửa</a>
+        <form method="post" action="/classes/<%= r.id %>/delete" data-confirm="Xóa lớp <%= r.class_code %>?"><button class="btn danger">Xóa</button></form>
+      </td>
+    </tr>
+  <% }) %>
+  </tbody>
+</table>
+<% } %>
+<%- include('../partials/footer') %>

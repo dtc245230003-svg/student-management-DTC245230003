@@ -1,0 +1,9 @@
+<%- include('partials/header', { title }) %>
+<h1>Tổng quan</h1>
+<div class="stats">
+  <a href="/classes"><strong><%= classes %></strong><span>lớp học</span></a>
+  <a href="/students"><strong><%= students %></strong><span>sinh viên</span></a>
+  <a href="/grades"><strong><%= grades %></strong><span>bản ghi điểm<% if (avg !== null) { %>, trung bình <%= avg %><% } %></span></a>
+</div>
+<p class="muted">Chọn một mục ở thanh trên để thêm, sửa hoặc xóa dữ liệu.</p>
+<%- include('partials/footer') %>
