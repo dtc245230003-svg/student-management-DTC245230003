@@ -66,7 +66,8 @@ router.post('/:id/delete', async (req, res, next) => {
     await pool.execute('DELETE FROM classes WHERE id = ?', [req.params.id]);
     res.redirect('/classes?msg=' + encodeURIComponent('Đã xóa lớp'));
   } catch (e) {
-    if (e.code === 'ER_ROW_IS_REFERENCED_2') {
+    // MySQL có thể trả errno 1217 (ER_ROW_IS_REFERENCED) hoặc 1451 (ER_ROW_IS_REFERENCED_2)
+    if (String(e.code || '').startsWith('ER_ROW_IS_REFERENCED')) {
       return res.redirect('/classes?err=' + encodeURIComponent('Không thể xóa: lớp này vẫn còn sinh viên. Hãy chuyển hoặc xóa sinh viên trước.'));
     }
     next(e);
