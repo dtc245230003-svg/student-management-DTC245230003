@@ -1,7 +1,8 @@
 # Mật khẩu và khóa riêng: TUYỆT ĐỐI không commit
 .env
 *.key
-nginx/certs/*.key
+# Chứng chỉ tự ký: sinh lại bằng scripts/gen-cert.sh, không commit
+nginx/certs/
 # Node
 node_modules/
 npm-debug.log*
