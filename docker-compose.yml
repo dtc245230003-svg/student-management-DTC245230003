@@ -1,7 +1,14 @@
-# Hệ thống quản lý sinh viên: web + MySQL + phpMyAdmin + Nginx + giám sát
-# Mạng: frontend (cổng vào), backend (internal, chứa DB), monitoring (metrics)
+# Hệ thống quản lý sinh viên: web + MySQL + phpMyAdmin + Nginx + giám sát + log
+# Mạng: frontend (cổng vào), backend (internal, chứa DB), monitoring (metrics/logs)
+
+# Hardening dùng chung: mọi container không được nâng quyền qua setuid/setgid
+x-security: &default-security
+  security_opt:
+    - no-new-privileges:true
+
 services:
   db:
+    <<: *default-security
     image: mysql:8.0
     container_name: sm-db
     restart: unless-stopped
@@ -27,12 +34,20 @@ services:
       # đặt thời gian chờ rộng để người chấm không gặp lỗi "unhealthy".
       retries: 30
       start_period: 120s
+    mem_limit: 512m
     networks: [backend]
 
   web:
+    <<: *default-security
     build: ./app
     container_name: sm-web
     restart: unless-stopped
+    # Không cần quyền Linux đặc biệt; filesystem chỉ đọc, chỉ /tmp được ghi
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
     environment:
       DB_HOST: db
       DB_NAME: ${DB_NAME}
@@ -50,9 +65,11 @@ services:
     networks: [frontend, backend]
 
   phpmyadmin:
+    <<: *default-security
     image: phpmyadmin:5
     container_name: sm-phpmyadmin
     restart: unless-stopped
+    mem_limit: 128m
     environment:
       PMA_HOST: db
     depends_on:
@@ -62,9 +79,16 @@ services:
 
   # Cổng vào duy nhất: 80 chuyển hướng 301 sang 443, 443 phục vụ HTTPS
   nginx:
+    <<: *default-security
     image: nginxinc/nginx-unprivileged:1.27-alpine
     container_name: sm-nginx
     restart: unless-stopped
+    # Image unprivileged đã cấu hình pid/temp trong /tmp, không cần capability
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 64m
     depends_on:
       web:
         condition: service_healthy
@@ -86,6 +110,7 @@ services:
 
   # ---------------- Giám sát (Giai đoạn 4) ----------------
   prometheus:
+    <<: *default-security
     image: prom/prometheus:v2.55.1
     container_name: sm-prometheus
     restart: unless-stopped
@@ -99,11 +124,13 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+    cap_drop: [ALL]
     mem_limit: 320m
     networks: [monitoring]
 
   # Truy cập qua Nginx tại /grafana/ (không publish cổng riêng)
   grafana:
+    <<: *default-security
     image: grafana/grafana:11.6.0
     container_name: sm-grafana
     restart: unless-stopped
@@ -120,14 +147,16 @@ services:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    cap_drop: [ALL]
     mem_limit: 320m
     depends_on:
       - prometheus
       - loki
     networks: [monitoring]
 
-  # Số liệu container. Cần đọc /var/run/docker.sock nên phải chạy quyền cao.
+  # Số liệu container. Cần đọc /var/run/docker.sock và /sys nên phải chạy quyền cao.
   cadvisor:
+    <<: *default-security
     # v0.54+ mới đọc được Docker 29 dùng containerd image store (snapshotter)
     image: gcr.io/cadvisor/cadvisor:v0.54.1
     container_name: sm-cadvisor
@@ -148,10 +177,12 @@ services:
 
   # Đọc stub_status của Nginx (cổng nội bộ 8080) và phơi metrics ở 9113
   nginx-exporter:
+    <<: *default-security
     image: nginx/nginx-prometheus-exporter:1.3.0
     container_name: sm-nginx-exporter
     restart: unless-stopped
     command: ["--nginx.scrape-uri=http://nginx:8080/nginx-status"]
+    cap_drop: [ALL]
     mem_limit: 64m
     depends_on:
       - nginx
@@ -159,12 +190,14 @@ services:
 
   # Đọc số liệu MySQL bằng user quyền tối thiểu (không dùng root)
   mysqld-exporter:
+    <<: *default-security
     image: prom/mysqld-exporter:v0.15.1
     container_name: sm-mysqld-exporter
     restart: unless-stopped
     command: ["--config.my-cnf=/etc/mysqld-exporter/.my.cnf"]
     volumes:
       - ./monitoring/.my.cnf:/etc/mysqld-exporter/.my.cnf:ro
+    cap_drop: [ALL]
     mem_limit: 64m
     depends_on:
       db:
@@ -174,6 +207,7 @@ services:
   # ---------------- Log tập trung (Giai đoạn 5) ----------------
   # Loki lưu log trên filesystem trong volume, retention 7 ngày.
   loki:
+    <<: *default-security
     image: grafana/loki:3.5.1
     container_name: sm-loki
     restart: unless-stopped
@@ -181,12 +215,14 @@ services:
     volumes:
       - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
+    cap_drop: [ALL]
     mem_limit: 256m
     networks: [monitoring]
 
   # Promtail đọc log container qua Docker API và đẩy về Loki.
   # Cần mount docker.sock (chỉ đọc) và thư mục log của Docker.
   promtail:
+    <<: *default-security
     image: grafana/promtail:3.5.1
     container_name: sm-promtail
     restart: unless-stopped
@@ -195,6 +231,7 @@ services:
       - ./monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    cap_drop: [ALL]
     mem_limit: 128m
     depends_on:
       - loki

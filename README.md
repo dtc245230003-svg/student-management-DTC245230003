@@ -247,13 +247,37 @@ Cách chạy: Grafana → **Explore** → chọn datasource **Loki** → dán tr
 - `server_tokens off` (ẩn phiên bản Nginx); giới hạn `client_max_body_size 2m`.
 - `/nginx-status` chỉ cho dải mạng nội bộ Docker, dùng cho exporter ở bước sau.
 - Web chạy bằng user `node` (không phải root); tài khoản DB của ứng dụng chỉ có SELECT/INSERT/UPDATE/DELETE.
-- Mật khẩu sinh bằng `openssl rand -hex 16`, lưu trong `.env` (đã gitignore, `chmod 600`).
+- Mật khẩu sinh bằng `openssl rand -hex 16`, lưu trong `.env` (đã gitignore, `chmod 600`). Mật khẩu root MySQL đã được xoay vòng; đăng nhập bằng mật khẩu cũ bị từ chối.
+- `security_opt: no-new-privileges:true` cho mọi container.
+- `cap_drop: [ALL]` cho web, nginx, prometheus, grafana, loki và các exporter; web + nginx chạy `read_only: true` với `tmpfs` cho `/tmp`.
+- Giới hạn RAM: `db` 512 MB, `web` 128 MB, `phpmyadmin` 128 MB, `nginx` 64 MB; các dịch vụ giám sát 64–320 MB.
 - Mạng `backend` đặt `internal: true`.
 - Grafana: tắt đăng ký tài khoản và truy cập ẩn danh; mật khẩu admin mạnh lấy từ `.env`; không publish cổng 3000.
 - Prometheus và các exporter chỉ nằm trong mạng `monitoring`, không publish cổng; truy cập qua Nginx.
 - `mysqld-exporter` dùng tài khoản DB riêng, quyền tối thiểu và `MAX_USER_CONNECTIONS 3`; tệp `.my.cnf` có mật khẩu nằm trong `.gitignore`, `chmod 600` và cấp ACL chỉ cho uid 65534 của exporter đọc.
 - cAdvisor và promtail cần đọc socket Docker/containerd nên chạy quyền cao; đây là rủi ro đã biết, được ghi rõ trong báo cáo.
 - Loki không publish cổng, dữ liệu log nằm trong volume riêng `loki_data`, retention 7 ngày.
+
+### 8.1. Kiểm chứng hardening
+
+```bash
+# 1. Web chạy user không phải root
+docker compose exec web id
+
+# 2. Tài khoản app không có quyền DROP (dùng bảng không tồn tại để không ảnh hưởng dữ liệu)
+docker compose exec db bash -c 'MYSQL_PWD="$APP_DB_PASSWORD" mysql -u"$APP_DB_USER" "$MYSQL_DATABASE" -e "DROP TABLE khong_ton_tai;"'
+
+# 3. Quyền thực tế của tài khoản app
+docker compose exec db bash -c 'MYSQL_PWD="$APP_DB_PASSWORD" mysql -u"$APP_DB_USER" -e "SHOW GRANTS FOR CURRENT_USER();"'
+
+# 4. Mạng backend là internal và các container tham gia
+docker network inspect student-management_backend --format 'Internal={{.Internal}} | {{range .Containers}}{{.Name}} {{end}}'
+
+# 5. DB không có đường ra internet
+docker compose exec db bash -c 'timeout 3 bash -c "echo > /dev/tcp/1.1.1.1/443" 2>/dev/null && echo CO-INTERNET || echo KHONG-RA-DUOC-INTERNET'
+```
+
+Kết quả mong đợi: `uid=1000(node)`; `ERROR 1142 ... DROP command denied`; chỉ có `SELECT, INSERT, UPDATE, DELETE`; `Internal=true`; `KHONG-RA-DUOC-INTERNET`.
 
 ## 9. Cấu trúc thư mục
 
@@ -308,6 +332,7 @@ Cách chạy: Grafana → **Explore** → chọn datasource **Loki** → dán tr
 | Loki log `error getting ingester clients: empty ring` lúc mới khởi động | Bình thường trong vài giây đầu; chờ 15–30 giây rồi kiểm tra `curl http://<IP_loki>:3100/ready`. |
 | Loki không có log | Kiểm tra `docker compose logs promtail`; bảo đảm container có nhãn compose `student-management`, promtail đọc được `/var/run/docker.sock` và `/var/lib/docker/containers`; nhãn lọc là `project="student-management"`. |
 | Log cũ vẫn còn sau 7 ngày | Compactor chỉ xoá theo chu kỳ 10 phút và cần quyền ghi volume `loki_data`; kiểm tra log Loki. |
+| mysqld-exporter báo `open /etc/mysqld-exporter/.my.cnf: permission denied` | ACL bị mất (thường do `chmod`). Chạy lại `./scripts/gen-exporter-config.sh` hoặc `setfacl -m u:65534:r monitoring/.my.cnf` rồi restart exporter. |
 
 ## 11. Dừng và xóa
 
