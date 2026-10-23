@@ -123,6 +123,7 @@ services:
     mem_limit: 320m
     depends_on:
       - prometheus
+      - loki
     networks: [monitoring]
 
   # Số liệu container. Cần đọc /var/run/docker.sock nên phải chạy quyền cao.
@@ -170,10 +171,40 @@ services:
         condition: service_healthy
     networks: [backend, monitoring]
 
+  # ---------------- Log tập trung (Giai đoạn 5) ----------------
+  # Loki lưu log trên filesystem trong volume, retention 7 ngày.
+  loki:
+    image: grafana/loki:3.5.1
+    container_name: sm-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    mem_limit: 256m
+    networks: [monitoring]
+
+  # Promtail đọc log container qua Docker API và đẩy về Loki.
+  # Cần mount docker.sock (chỉ đọc) và thư mục log của Docker.
+  promtail:
+    image: grafana/promtail:3.5.1
+    container_name: sm-promtail
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    mem_limit: 128m
+    depends_on:
+      - loki
+    networks: [monitoring]
+
 volumes:
   mysql_data:
   prometheus_data:
   grafana_data:
+  loki_data:
 
 networks:
   frontend:

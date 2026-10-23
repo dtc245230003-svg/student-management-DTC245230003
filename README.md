@@ -2,7 +2,8 @@
 
 Ứng dụng web CRUD quản lý **lớp học, sinh viên và điểm số**, triển khai hoàn toàn bằng **Docker Compose**:
 Node.js/Express + MySQL + phpMyAdmin, đặt sau **Nginx reverse proxy** với HTTPS tự ký và security headers.
-Hệ thống được giám sát bằng **Prometheus + Grafana** (số liệu container, web server, database).
+Hệ thống được giám sát bằng **Prometheus + Grafana** (số liệu container, web server, database)
+và gom log tập trung bằng **Loki + Promtail**, truy vấn bằng LogQL ngay trong Grafana.
 
 > Bài thi thực hành cuối kỳ môn *Triển khai và Quản trị Hệ thống Phần mềm*.
 > Sinh viên: Trần Trung Hiếu — MSSV DTC245230003.
@@ -25,6 +26,9 @@ flowchart LR
   PR -.->|pull metrics| ME[mysqld exporter]
   ME --> D
   G -->|datasource| PR
+  G -->|LogQL| LK[(Loki :3100)]
+  PT[Promtail] -->|push log| LK
+  PT -.->|đọc log container| DK[Docker / containerd]
 
   subgraph frontend [Mạng frontend]
     N; W; P
@@ -33,20 +37,20 @@ flowchart LR
     W; P; D; ME
   end
   subgraph monitoring [Mạng monitoring]
-    PR; G; C; NE; ME; N
+    PR; G; C; NE; ME; N; LK; PT
   end
 ```
 
 - **Nginx** là cổng vào duy nhất, chỉ publish cổng **80** và **443**. Web, phpMyAdmin, Prometheus, Grafana không mở cổng ra ngoài.
 - **backend** là mạng `internal: true`: container trong mạng này không có đường ra internet.
-- **monitoring** chứa Prometheus, Grafana và các exporter. Prometheus kéo (pull) số liệu mỗi 15 giây.
+- **monitoring** chứa Prometheus, Grafana, Loki, Promtail và các exporter. Prometheus kéo (pull) số liệu mỗi 15 giây; Promtail đẩy log container về Loki.
 - Dữ liệu MySQL lưu trong volume `mysql_data`, không mất khi dựng lại container.
 
 ## 2. Yêu cầu
 
 - Docker Engine + Docker Compose v2 (`docker compose`)
 - `openssl` (sinh chứng chỉ), `setfacl` (cấp quyền đọc khóa cho container)
-- RAM tối thiểu ~3 GB (đã chạy thử với 3.8 GB), ổ đĩa trống tối thiểu ~3 GB
+- RAM tối thiểu ~3 GB (đã chạy thử với 3.8 GB), ổ đĩa trống tối thiểu ~4 GB (toàn bộ image khoảng 4,1 GB)
 
 ## 3. Cài đặt
 
@@ -211,6 +215,30 @@ docker compose ps
 docker compose logs --tail=50 cadvisor grafana prometheus
 ```
 
+### 7.5. Log tập trung (Loki + Promtail)
+
+| Dịch vụ | Image | Vai trò | Mạng |
+|---|---|---|---|
+| `loki` | `grafana/loki:3.5.1` | Lưu log trên filesystem (volume `loki_data`), retention 7 ngày | `monitoring` |
+| `promtail` | `grafana/promtail:3.5.1` | Đọc log container qua Docker API, gắn nhãn, đẩy về Loki | `monitoring` |
+
+- Promtail dùng `docker_sd_configs` qua `/var/run/docker.sock` (chỉ đọc) và đọc tệp log trong `/var/lib/docker/containers` (chỉ đọc). Nhãn gắn vào log: `container`, `service`, `project`, `stream`; chỉ giữ container thuộc project `student-management`.
+- Loki chạy single-binary, schema v13, retention 168 giờ, giới hạn ingestion 8 MB/s để không làm đầy đĩa.
+- Grafana có datasource **Loki**; truy vấn bằng **Explore**.
+- Không publish cổng 3100/9080 ra ngoài.
+
+**Rủi ro cần ghi trong báo cáo:** mount `/var/run/docker.sock` cho phép tiến trình trong container điều khiển Docker daemon. Ở đây chỉ mount chỉ đọc và chỉ Promtail dùng, nhưng đây vẫn là quyền cao; phương án thay thế là chỉ mount thư mục log `/var/lib/docker/containers` và không dùng Docker service discovery.
+
+**Ba truy vấn LogQL mẫu (đã chạy thật trên hệ thống):**
+
+| Mục đích | LogQL | Kết quả thật |
+|---|---|---|
+| Log ứng dụng web | `{service="web"}` | `GET /students 200 4ms`… |
+| Lọc lỗi 404 của Nginx | `{service="nginx"} \|= " 404 "` | các dòng `"GET /khong-ton-tai HTTP/2.0" 404` |
+| Tốc độ log theo dịch vụ | `sum by (service) (rate({project="student-management"}[1m]))` | `cadvisor 0.05`, `grafana 0.43`, `nginx 0.52`, `web 0.17`… |
+
+Cách chạy: Grafana → **Explore** → chọn datasource **Loki** → dán truy vấn → **Run query**, thời gian **Last 15 minutes**.
+
 ## 8. Bảo mật đã áp dụng
 
 - Nginx là cổng vào duy nhất; web/phpMyAdmin không publish cổng.
@@ -224,7 +252,8 @@ docker compose logs --tail=50 cadvisor grafana prometheus
 - Grafana: tắt đăng ký tài khoản và truy cập ẩn danh; mật khẩu admin mạnh lấy từ `.env`; không publish cổng 3000.
 - Prometheus và các exporter chỉ nằm trong mạng `monitoring`, không publish cổng; truy cập qua Nginx.
 - `mysqld-exporter` dùng tài khoản DB riêng, quyền tối thiểu và `MAX_USER_CONNECTIONS 3`; tệp `.my.cnf` có mật khẩu nằm trong `.gitignore`, `chmod 600` và cấp ACL chỉ cho uid 65534 của exporter đọc.
-- cAdvisor và promtail (giai đoạn sau) cần đọc socket Docker/containerd nên chạy quyền cao; đây là rủi ro đã biết, được ghi rõ trong báo cáo.
+- cAdvisor và promtail cần đọc socket Docker/containerd nên chạy quyền cao; đây là rủi ro đã biết, được ghi rõ trong báo cáo.
+- Loki không publish cổng, dữ liệu log nằm trong volume riêng `loki_data`, retention 7 ngày.
 
 ## 9. Cấu trúc thư mục
 
@@ -242,6 +271,8 @@ docker compose logs --tail=50 cadvisor grafana prometheus
 ├── monitoring/
 │   ├── prometheus.yml       # cấu hình scrape 4 target
 │   ├── .my.cnf              # mật khẩu exporter (sinh tự động, KHÔNG commit)
+│   ├── loki/loki-config.yml # lưu log, retention 7 ngày
+│   ├── promtail/promtail-config.yml # đọc log container, gắn nhãn
 │   └── grafana/
 │       ├── provisioning/    # datasource + provider dashboard
 │       └── dashboards/      # dashboard JSON nạp tự động
@@ -274,6 +305,9 @@ docker compose logs --tail=50 cadvisor grafana prometheus
 | Grafana hiện “No data” dù Prometheus có dữ liệu | Prometheus chạy với `--web.route-prefix=/prometheus/`, nên URL datasource phải là `http://prometheus:9090/prometheus` (thiếu `/prometheus` sẽ 404). Sửa `monitoring/grafana/provisioning/datasources/datasources.yml` rồi `docker compose restart grafana`. |
 | mysqld-exporter báo `Access denied` | Chạy lại `./scripts/gen-exporter-config.sh` và `docker compose restart mysqld-exporter`; kiểm tra user exporter trong DB. |
 | Grafana/Prometheus trả `502` sau khi restart hai container này | Nginx phân giải DNS lúc khởi động nên vẫn trỏ IP cũ. Chạy `docker compose restart nginx`. |
+| Loki log `error getting ingester clients: empty ring` lúc mới khởi động | Bình thường trong vài giây đầu; chờ 15–30 giây rồi kiểm tra `curl http://<IP_loki>:3100/ready`. |
+| Loki không có log | Kiểm tra `docker compose logs promtail`; bảo đảm container có nhãn compose `student-management`, promtail đọc được `/var/run/docker.sock` và `/var/lib/docker/containers`; nhãn lọc là `project="student-management"`. |
+| Log cũ vẫn còn sau 7 ngày | Compactor chỉ xoá theo chu kỳ 10 phút và cần quyền ghi volume `loki_data`; kiểm tra log Loki. |
 
 ## 11. Dừng và xóa
 
@@ -286,7 +320,7 @@ docker compose down -v       # dừng và XÓA volume dữ liệu (mất toàn b
 
 ## 12. Ghi chú triển khai
 
-- Image ghim phiên bản cụ thể (`mysql:8.0`, `phpmyadmin:5`, `nginxinc/nginx-unprivileged:1.27-alpine`, `prom/prometheus:v2.55.1`, `grafana/grafana:11.6.0`, `gcr.io/cadvisor/cadvisor:v0.54.1`) để tránh thay đổi ngoài ý muốn.
+- Image ghim phiên bản cụ thể (`mysql:8.0`, `phpmyadmin:5`, `nginxinc/nginx-unprivileged:1.27-alpine`, `prom/prometheus:v2.55.1`, `grafana/grafana:11.6.0`, `gcr.io/cadvisor/cadvisor:v0.54.1`, `grafana/loki:3.5.1`, `grafana/promtail:3.5.1`) để tránh thay đổi ngoài ý muốn.
 - cAdvisor phải dùng v0.54.1 vì Docker 29 chuyển sang containerd image store; bản cũ hơn không đọc được container nào.
 - Nginx dùng image **unprivileged** (user 101) nên lắng nghe 8080/8443 bên trong container và được ánh xạ ra 80/443.
 - Cấu hình Nginx: `location` nào có `add_header` sẽ không kế thừa header của `server`, nên khối `/pma/` khai báo lại đầy đủ (kèm CSP nới lỏng cho phpMyAdmin).
