@@ -11,3 +11,9 @@ npm-debug.log*
 # Khác
 *.log
 .DS_Store
+# Ghi chú làm việc nội bộ, không thuộc bài nộp
+CLAUDE.md
+# Thư viện Python tải về để sinh báo cáo (không cần đưa lên Git)
+tools/vendor/
+__pycache__/
+*.pyc

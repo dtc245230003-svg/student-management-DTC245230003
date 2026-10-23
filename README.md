@@ -50,12 +50,13 @@ flowchart LR
 
 - Docker Engine + Docker Compose v2 (`docker compose`)
 - `openssl` (sinh chứng chỉ), `setfacl` (cấp quyền đọc khóa cho container)
+- `curl`, `bash`, `python3` và `timeout` (dùng cho script kiểm thử `scripts/smoke-test.sh`)
 - RAM tối thiểu ~3 GB (đã chạy thử với 3.8 GB), ổ đĩa trống tối thiểu ~4 GB (toàn bộ image khoảng 4,1 GB)
 
 ## 3. Cài đặt
 
 ```bash
-git clone <URL_REPO> student-management
+git clone https://github.com/dtc245230003-svg/student-management-DTC245230003.git student-management
 cd student-management
 ```
 
@@ -165,6 +166,23 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://192.168.44.131/grafana/login
 ```
 
 Kết quả mong đợi: `301`, đủ 6 header bảo mật, TLS 1.1 bị từ chối, cổng 3000/8081 không kết nối được, 4 target `up`, Grafana trả `200`.
+
+### 6.1. Kiểm thử tự động (smoke test)
+
+```bash
+./scripts/smoke-test.sh
+```
+
+Script kiểm tra 59 mục: cấu hình Compose, 11 container, HTTP → HTTPS, 6 security header,
+11 route ứng dụng, cổng public, Prometheus target/metrics, 5 endpoint `/metrics` của exporter,
+Loki `/ready` + LogQL, bảng và số dòng database, cùng CRUD tạm cho lớp/sinh viên/điểm.
+
+- Kết quả lần chạy đã xác minh ngày 23/10/2026: **PASS=59, FAIL=0, SKIP=0**, mã thoát `0`.
+- Script tạo bản ghi tạm `SMK<timestamp>` và luôn dọn bằng trap `EXIT/INT/TERM`;
+  không dùng `DROP`, `TRUNCATE`, `RESET` và không sửa dữ liệu có sẵn.
+- Sau khi chạy, dữ liệu phải trở về đúng **3 lớp, 8 sinh viên, 10 điểm**.
+- Nếu một mục không thể kiểm tra (thiếu công cụ/quyền), script ghi `SKIP` kèm lý do;
+  chỉ ghi `PASS` khi lệnh thực sự thành công.
 
 ## 7. Giám sát (Prometheus + Grafana)
 
@@ -305,8 +323,14 @@ Kết quả mong đợi: `uid=1000(node)`; `ERROR 1142 ... DROP command denied`;
 │   └── certs/               # chứng chỉ tự ký (KHÔNG commit)
 ├── scripts/
 │   ├── gen-cert.sh          # sinh chứng chỉ TLS
-│   └── gen-exporter-config.sh # sinh monitoring/.my.cnf từ .env
-├── docs/screenshots/        # ảnh minh chứng
+│   ├── gen-exporter-config.sh # sinh monitoring/.my.cnf từ .env
+│   └── smoke-test.sh        # kiểm thử tự động toàn hệ thống
+├── tools/
+│   ├── build-report.py      # sinh báo cáo DOCX từ dữ liệu thật
+│   └── vendor/              # wheel python-docx/lxml (tải về, KHÔNG commit)
+├── docs/
+│   ├── screenshots/         # ảnh minh chứng + DANH-SACH-ANH.md
+│   └── report/              # báo cáo DOCX
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -349,3 +373,11 @@ docker compose down -v       # dừng và XÓA volume dữ liệu (mất toàn b
 - cAdvisor phải dùng v0.54.1 vì Docker 29 chuyển sang containerd image store; bản cũ hơn không đọc được container nào.
 - Nginx dùng image **unprivileged** (user 101) nên lắng nghe 8080/8443 bên trong container và được ánh xạ ra 80/443.
 - Cấu hình Nginx: `location` nào có `add_header` sẽ không kế thừa header của `server`, nên khối `/pma/` khai báo lại đầy đủ (kèm CSP nới lỏng cho phpMyAdmin).
+
+## 13. Tài liệu kèm theo
+
+- Báo cáo DOCX: `docs/report/Bao-cao-DTC245230003.docx` (sinh bằng `tools/build-report.py`).
+  Khi mở bằng Microsoft Word, cập nhật mục lục bằng chuột phải → **Update Field**.
+- Ảnh minh chứng: `docs/screenshots/`; danh sách và trạng thái ở `docs/screenshots/DANH-SACH-ANH.md`.
+- Kiểm thử tự động: `scripts/smoke-test.sh`.
+- Thư viện Python để sinh báo cáo nằm ở `tools/vendor/` (tải từ PyPI, không commit).
