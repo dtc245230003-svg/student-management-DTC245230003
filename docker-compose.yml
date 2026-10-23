@@ -1,5 +1,5 @@
-# Giai đoạn 2: web + MySQL + phpMyAdmin
-# (Nginx, giám sát, log sẽ được thêm ở các giai đoạn sau)
+# Hệ thống quản lý sinh viên: web + MySQL + phpMyAdmin + Nginx + giám sát
+# Mạng: frontend (cổng vào), backend (internal, chứa DB), monitoring (metrics)
 services:
   db:
     image: mysql:8.0
@@ -11,10 +11,13 @@ services:
       MYSQL_DATABASE: ${DB_NAME}
       APP_DB_USER: ${DB_USER}
       APP_DB_PASSWORD: ${DB_PASSWORD}
+      EXPORTER_DB_USER: ${EXPORTER_DB_USER}
+      EXPORTER_DB_PASSWORD: ${EXPORTER_DB_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
       - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./db/02-create-app-user.sh:/docker-entrypoint-initdb.d/02-create-app-user.sh:ro
+      - ./db/03-create-exporter-user.sh:/docker-entrypoint-initdb.d/03-create-exporter-user.sh:ro
     healthcheck:
       # Dùng tài khoản app qua TCP: chỉ thành công sau khi khởi tạo DB xong
       test: ["CMD-SHELL", "mysql -h127.0.0.1 -u$$APP_DB_USER -p$$APP_DB_PASSWORD -e 'SELECT 1' $$MYSQL_DATABASE"]
@@ -79,12 +82,101 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    networks: [frontend]
+    networks: [frontend, monitoring]
+
+  # ---------------- Giám sát (Giai đoạn 4) ----------------
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: sm-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=250MB
+      - --web.route-prefix=/prometheus/
+      - --web.external-url=https://${SERVER_IP}/prometheus/
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    mem_limit: 320m
+    networks: [monitoring]
+
+  # Truy cập qua Nginx tại /grafana/ (không publish cổng riêng)
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: sm-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: https://${SERVER_IP}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    mem_limit: 320m
+    depends_on:
+      - prometheus
+    networks: [monitoring]
+
+  # Số liệu container. Cần đọc /var/run/docker.sock nên phải chạy quyền cao.
+  cadvisor:
+    # v0.54+ mới đọc được Docker 29 dùng containerd image store (snapshotter)
+    image: gcr.io/cadvisor/cadvisor:v0.54.1
+    container_name: sm-cadvisor
+    restart: unless-stopped
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker 29 dùng containerd image store: cAdvisor cần socket này để đọc lớp ảnh
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    mem_limit: 160m
+    networks: [monitoring]
+
+  # Đọc stub_status của Nginx (cổng nội bộ 8080) và phơi metrics ở 9113
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    container_name: sm-nginx-exporter
+    restart: unless-stopped
+    command: ["--nginx.scrape-uri=http://nginx:8080/nginx-status"]
+    mem_limit: 64m
+    depends_on:
+      - nginx
+    networks: [frontend, monitoring]
+
+  # Đọc số liệu MySQL bằng user quyền tối thiểu (không dùng root)
+  mysqld-exporter:
+    image: prom/mysqld-exporter:v0.15.1
+    container_name: sm-mysqld-exporter
+    restart: unless-stopped
+    command: ["--config.my-cnf=/etc/mysqld-exporter/.my.cnf"]
+    volumes:
+      - ./monitoring/.my.cnf:/etc/mysqld-exporter/.my.cnf:ro
+    mem_limit: 64m
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend, monitoring]
 
 volumes:
   mysql_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   frontend:
+  monitoring:
   backend:
     internal: true    # mạng DB không có đường ra internet

@@ -3,6 +3,8 @@
 *.key
 # Chứng chỉ tự ký: sinh lại bằng scripts/gen-cert.sh, không commit
 nginx/certs/
+# Cấu hình exporter chứa mật khẩu: sinh bằng scripts/gen-exporter-config.sh
+monitoring/.my.cnf
 # Node
 node_modules/
 npm-debug.log*

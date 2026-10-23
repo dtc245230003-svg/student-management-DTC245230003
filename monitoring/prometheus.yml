@@ -1,0 +1,29 @@
+# Cấu hình Prometheus: kéo (pull) số liệu từ các exporter theo chu kỳ.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: student-management
+
+scrape_configs:
+  - job_name: prometheus
+    # Prometheus chạy với --web.route-prefix=/prometheus/ nên metrics tự thân
+    # nằm ở /prometheus/metrics, không phải /metrics mặc định.
+    metrics_path: /prometheus/metrics
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Số liệu container (CPU, RAM, mạng) - cAdvisor
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Số liệu Nginx - đọc từ stub_status qua nginx-prometheus-exporter
+  - job_name: nginx
+    static_configs:
+      - targets: ['nginx-exporter:9113']
+
+  # Số liệu MySQL - mysqld-exporter dùng user DB quyền tối thiểu
+  - job_name: mysql
+    static_configs:
+      - targets: ['mysqld-exporter:9104']
